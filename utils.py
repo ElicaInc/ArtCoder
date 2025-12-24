@@ -13,28 +13,49 @@ load = transforms.ToTensor()
 
 def load_image(filename, size=None, scale=None):
     img = Image.open(filename)
+    
+    # Convert to RGB if needed (handles grayscale, palette, etc.)
+    if img.mode != 'RGB':
+        img = img.convert('RGB')
+    
     if size is not None:
-        img = img.resize((size, size), Image.ANTIALIAS)
+        img = img.resize((size, size), Image.LANCZOS)
     elif scale is not None:
-        img = img.resize((int(img.size[0] / scale), int(img.size[1] / scale)), Image.ANTIALIAS)
+        img = img.resize((int(img.size[0] / scale), int(img.size[1] / scale)), Image.LANCZOS)
     return img
 
 
 def add_pattern(target_PIL, code_PIL, module_number=37, module_size=16):
     target_img = np.asarray(target_PIL)
     code_img = np.array(code_PIL)
-    output = target_img
+    
+    # Ensure code_img has the same dimensions as target_img
+    if len(code_img.shape) == 2 and len(target_img.shape) == 3:
+        # Convert grayscale to RGB by repeating the same channel
+        code_img = np.stack([code_img] * 3, axis=-1)
+    elif len(code_img.shape) == 3 and code_img.shape[2] == 4 and len(target_img.shape) == 3:
+        # Convert RGBA to RGB
+        code_img = code_img[:, :, :3]
+    
+    output = target_img.copy()
     output = np.require(output, dtype='uint8', requirements=['O', 'W'])
     ms = module_size  # module size
     mn = module_number  # module_number
-    output[0 * ms:(8 * ms) - 1, 0 * ms:(8 * ms) - 1, :] = code_img[0 * ms:(8 * ms) - 1, 0 * ms:(8 * ms) - 1, :]
-    output[((mn - 8) * ms) + 1:(mn * ms), 0 * ms:(8 * ms) - 1, :] = code_img[((mn - 8) * ms) + 1:(mn * ms),
-                                                                    0 * ms:(8 * ms) - 1,
-                                                                    :]
-    output[0 * ms: (8 * ms) - 1, ((mn - 8) * ms) + 1:(mn * ms), :] = code_img[0 * ms: (8 * ms) - 1,
-                                                                     ((mn - 8) * ms) + 1:(mn * ms), :]
-    output[28 * ms: (33 * ms) - 1, 28 * ms:(33 * ms) - 1, :] = code_img[28 * ms: (33 * ms) - 1, 28 * ms:(33 * ms) - 1,
-                                                               :]
+    
+    # Only add essential QR patterns (finders and alignment) - preserve content everywhere else
+    # Add finder patterns only (3 corners) - 7x7 each with 1-module separators
+    output[0 * ms:(8 * ms), 0 * ms:(8 * ms), :] = code_img[0 * ms:(8 * ms), 0 * ms:(8 * ms), :]  # Top-left finder
+    output[((mn - 8) * ms):(mn * ms), 0 * ms:(8 * ms), :] = code_img[((mn - 8) * ms):(mn * ms), 0 * ms:(8 * ms), :]  # Bottom-left finder  
+    output[0 * ms:(8 * ms), ((mn - 8) * ms):(mn * ms), :] = code_img[0 * ms:(8 * ms), ((mn - 8) * ms):(mn * ms), :]  # Top-right finder
+    
+    # Add alignment pattern (center at position 30,30 for version 5) - 5x5 pattern
+    align_center = 30
+    align_size = 2  # 5x5 pattern, so ±2 from center  
+    align_start_row = (align_center - align_size) * ms
+    align_end_row = (align_center + align_size + 1) * ms
+    align_start_col = (align_center - align_size) * ms  
+    align_end_col = (align_center + align_size + 1) * ms
+    output[align_start_row:align_end_row, align_start_col:align_end_col, :] = code_img[align_start_row:align_end_row, align_start_col:align_end_col, :]
 
     output = Image.fromarray(output.astype('uint8'))
     print('Added finder and alignment patterns.')
@@ -122,7 +143,7 @@ def get_target(binary_result, b_robust, w_robust, module_num=37, module_size=16)
             else:
                 target[i * module_size:(i + 1) * module_size, j * module_size:(j + 1) * module_size] = w_robust
 
-    target = load(Image.fromarray(target.astype('uint8')).convert('RGB')).unsqueeze(0).cuda()
+    target = load(Image.fromarray(target.astype('uint8')).convert('RGB')).unsqueeze(0)
     return target
 
 
@@ -143,14 +164,20 @@ def tensor_to_PIL(tensor):
     return image
 
 
-def get_3DGauss(s=0, e=15, sigma=1.5, mu=7.5):
-    x, y = np.mgrid[s:e:16j, s:e:16j]
+def get_3DGauss(module_size=16):
+    # Dynamic Gaussian kernel generation based on module_size
+    s, e = 0, module_size - 1
+    sigma = module_size * 0.09375  # 1.5/16 ratio for dynamic scaling
+    mu = (module_size - 1) / 2  # Center position
+    
+    x, y = np.mgrid[s:e:complex(module_size), s:e:complex(module_size)]
     z = (1 / (2 * math.pi * sigma ** 2)) * np.exp(-((x - mu) ** 2 + (y - mu) ** 2) / (2 * sigma ** 2))
     z = torch.from_numpy(MaxMinNormalization(z.astype(np.float32)))
-    for j in range(16):
-        for i in range(16):
-            if z[i, j] < 0.1:
-                z[i, j] = 0
+    
+    # Apply threshold filtering
+    threshold = 0.1
+    z[z < threshold] = 0
+    
     return z
 
 

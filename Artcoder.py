@@ -23,8 +23,8 @@ def artcoder(STYLE_IMG_PATH, CONTENT_IMG_PATH, CODE_PATH, OUTPUT_DIR,
         transforms.ToTensor(),
     ])
 
-    vgg = Vgg16(requires_grad=False).cuda()  # vgg16 model
-    ss_layer = SSlayer(requires_grad=False).cuda()
+    vgg = Vgg16(requires_grad=False)  # vgg16 model
+    ss_layer = SSlayer(module_size=MODULE_SIZE, requires_grad=False)
 
     style_img = utils.load_image(filename=STYLE_IMG_PATH, size=IMAGE_SIZE)
     content_img = utils.load_image(filename=CONTENT_IMG_PATH, size=IMAGE_SIZE)
@@ -36,9 +36,9 @@ def artcoder(STYLE_IMG_PATH, CONTENT_IMG_PATH, CODE_PATH, OUTPUT_DIR,
     content_img = transform(content_img)
     init_img = transform(init_img)
 
-    init_img = init_img.repeat(1, 1, 1, 1).cuda()
-    style_img = style_img.repeat(1, 1, 1, 1).cuda()  # make fake batch
-    content_img = content_img.repeat(1, 1, 1, 1).cuda()
+    init_img = init_img.repeat(1, 1, 1, 1)
+    style_img = style_img.repeat(1, 1, 1, 1)  # make fake batch
+    content_img = content_img.repeat(1, 1, 1, 1)
 
     features_style = vgg(style_img)  # feature maps extracted from VGG
     features_content = vgg(content_img)
@@ -93,7 +93,7 @@ def artcoder(STYLE_IMG_PATH, CONTENT_IMG_PATH, CODE_PATH, OUTPUT_DIR,
                 code_target = code_target.cpu()
                 activate_num = MODULE_NUM * MODULE_NUM
 
-            code_loss = CODE_WEIGHT * mse_loss(code_target.cuda(), code_y.cuda())
+            code_loss = CODE_WEIGHT * mse_loss(code_target, code_y)
             content_loss = CONTENT_WEIGHT * mse_loss(fc, fy)  # content loss
 
             # tv_loss = TV_WEIGHT * (torch.sum(torch.abs(y[:, :, :, :-1] - y[:, :, :, 1:])) +
